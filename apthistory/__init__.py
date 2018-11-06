@@ -17,10 +17,12 @@ def _parse_date(date_string):
 
 class Package(object):
 
-    def __init__(self, name, architecture, version):
+    def __init__(self, name, architecture, version, old_version, automatic):
         self.name = name
         self.architecture = architecture
         self.version = version
+        self.old_version = old_version
+        self.automatic = automatic
 
     def __str__(self):
         return "{}:{} ({})".format(self.name, self.architecture, self.version)
@@ -28,8 +30,20 @@ class Package(object):
     def __repr__(self):
         return "Package({}, {}, {})".format(self.name, self.architecture, self.version)
 
+def _parse_package(name, architecture, version, action):
+    if action == 'Install':
+        automatic = version.endswith(', automatic')
+        if automatic:
+            version = version[:-11]
+    else:
+        automatic = None
+    if action == 'Upgrade':
+        old_version, version = version.split(', ')
+    else:
+        old_version = None
+    return Package(name, architecture, version, old_version, automatic)
 
-def _parse_packages(raw_packages):
+def _parse_packages(raw_packages, action):
     l = len(raw_packages)
     pos = 0
     packages = []
@@ -37,7 +51,7 @@ def _parse_packages(raw_packages):
         m = PACKAGE_FORMAT.match(raw_packages, pos)
         assert m, 'Malformed log in packages list \'{}\''.format(raw_packages)
         assert m.start() == pos, 'Malformed log in packages list \'{}\''.format(raw_packages)
-        packages.append(Package(m.group(1), m.group(2), m.group(3)))
+        packages.append(_parse_package(*m.groups(), action))
         pos += len(m.group()) + 2
     return packages
 
@@ -50,7 +64,7 @@ class AptHistoryEntry(object):
         self.command = raw_data.pop('Commandline')
         self.requested_by = raw_data.pop('Requested-By', None)
         self.error = raw_data.pop('Error', None)
-        self.actions = { action: _parse_packages(raw_data.pop(action)) for action in ACTIONS if action in raw_data }
+        self.actions = { action: _parse_packages(raw_data.pop(action), action) for action in ACTIONS if action in raw_data }
         assert not raw_data, 'Malformed log: Unknown entries: {}'.format(', '.join(raw_data.keys()))
 
     def get_package_action(self, name, architecture=None, version=None):

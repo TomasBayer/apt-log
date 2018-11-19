@@ -56,9 +56,12 @@ class AptHistoryEntry(object):
 
     def __init__(self, raw_data):
         self.id = None
-        self.start_date = _parse_date(raw_data.pop('Start-Date'))
+        self.start_date = _parse_date(raw_data.pop('Start-Date')) if 'Start-Date' in raw_data else None
         self.end_date = _parse_date(raw_data.pop('End-Date')) if 'End-Date' in raw_data else None
-        self.duration = self.end_date - self.start_date
+        if self.start_date is not None and self.end_date is not None:
+            self.duration = self.end_date - self.start_date
+        else:
+            self.duration = None
         self.command = raw_data.pop('Commandline')
         self.requested_by = raw_data.pop('Requested-By', None)
         self.error = raw_data.pop('Error', None)
@@ -66,6 +69,12 @@ class AptHistoryEntry(object):
         for action, packages in itertools.chain.from_iterable(_parse_package_list(raw_data.pop(action), action) for action in ACTIONS if action in raw_data):
             self.actions.setdefault(action, []).append(packages)
         assert not raw_data, 'Malformed log: Unknown entries: {}'.format(', '.join(raw_data.keys()))
+
+    def is_before(self, date):
+        return self.end_date is not None and self.end_date < date
+
+    def is_after(self, date):
+        return self.start_date is not None and self.start_date > date
 
     def get_packages(self, action, name, architecture=None, version=None, regex=False):
         for package in self.actions.get(action, []):
@@ -94,7 +103,7 @@ class AptHistory(object):
     def get_entries(self, min_date=None, max_date=None):
         min_date = datetime.datetime.min if min_date is None else min_date if isinstance(min_date, datetime.datetime) else dateparser.parse(min_date)
         max_date = datetime.datetime.max if max_date is None else max_date if isinstance(max_date, datetime.datetime) else dateparser.parse(max_date)
-        return filter(lambda entry: min_date < entry.start_date <= entry.end_date < max_date, self.entries)
+        return filter(lambda entry: entry.is_after(min_date) and entry.is_before(max_date), self.entries)
 
     def _parse_log(self, log_fh):
         entry = {}

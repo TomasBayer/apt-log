@@ -71,8 +71,10 @@ elif args.action == 'show':
     
     table = Texttable(0)
     table.set_deco(0)
-    table.add_row(['Start-Date:', entry.start_date.strftime('%Y-%m-%d %H:%M:%S'), ''])
-    table.add_row(['End-Date:', entry.end_date.strftime('%Y-%m-%d %H:%M:%S'), ''])
+    if entry.start_date is not None:
+        table.add_row(['Start-Date:', entry.start_date.strftime('%Y-%m-%d %H:%M:%S'), ''])
+    if entry.end_date is not None:
+        table.add_row(['End-Date:', entry.end_date.strftime('%Y-%m-%d %H:%M:%S'), ''])
     table.add_row(['Duration:', entry.duration, ''])
     if entry.requested_by:
         table.add_row(['Requested-By:', entry.requested_by, ''])

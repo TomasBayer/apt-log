@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "apt-log"
 version = "0.1"
-description = ""
+description = "A command-line tool and module for convenient APT log file display and filtering"
 authors = ["Tomas Bayer <mail@tomas.berlin>"]
 readme = "README.md"
 license = "MIT"

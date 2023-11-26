@@ -52,7 +52,7 @@ def _parse_package_list(raw_packages, action):
         yield target_action, Package(name, architecture, version, old_version)
         pos += len(m.group()) + 2
 
-class AptHistoryEntry(object):
+class AptLogEntry(object):
 
     def __init__(self, raw_data):
         self.id = None
@@ -91,11 +91,11 @@ class AptHistoryEntry(object):
         return actions
 
 
-class AptHistory(object):
+class AptLog(object):
 
     def __init__(self, log_dir=BASE_DIR):
         self.log_dir = log_dir
-        self.entries = sorted(map(AptHistoryEntry, self._parse_logs()), key=lambda entry:entry.start_date)
+        self.entries = sorted(map(AptLogEntry, self._parse_logs()), key=lambda entry:entry.start_date)
 
         for n, entry in enumerate(self.entries, 1):
             entry.id = n

@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "apt-log"
+version = "0.1"
+description = ""
+authors = ["Tomas Bayer <mail@tomas.berlin>"]
+readme = "README.md"
+license = "MIT"
+
+[tool.poetry.scripts]
+apt-log = "apt_log.cli:run"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+dateparser = "^1.2.0"
+texttable = "^1.7.0"
+
+[tool.poetry.dev-dependencies]
+pytest = "^7"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

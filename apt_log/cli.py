@@ -31,6 +31,10 @@ def list_entries(
             "--show-versions", "-v",
             help="Show versions of packages.",
         )] = False,
+        show_commands: Annotated[bool, typer.Option(
+            "--show-commands", "-c",
+            help="Show commands that triggered the transactions.",
+        )] = False,
         package_name: Annotated[Optional[str], typer.Option(
             "--package", "-p",
             metavar='PACKAGE_NAME',
@@ -46,6 +50,10 @@ def list_entries(
     table = Table(header_style='bold magenta', box=box.SIMPLE_HEAD)
     table.add_column("ID", style='cyan')
     table.add_column("DATE", style='green')
+
+    if show_commands:
+        table.add_column("COMMAND", style='yellow')
+
     table.add_column("ACTION", style='blue')
     table.add_column("PACKAGES", style='yellow')
 
@@ -77,6 +85,9 @@ def list_entries(
     for entry in entries:
         base_columns = [str(entry.id), entry.start_date.strftime('%Y-%m-%d %H:%M')]
 
+        if show_commands:
+            base_columns.append(entry.command_line)
+
         if entry.has_changed_packages():
             for n, (action, packages) in enumerate(entry.changed_packages_by_action.items()):
                 # Packages that are marked as 'automatic' are considered dependencies. They should not be displayed.
@@ -101,7 +112,7 @@ def list_entries(
                     )
 
                 table.add_row(
-                    *(base_columns if n == 0 else ["", ""]),
+                    *(base_columns if n == 0 else [""] * len(base_columns)),
                     action,
                     packages_string,
                 )

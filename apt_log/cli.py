@@ -9,7 +9,7 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 
-from apt_log.log import ChangedPackage, InvalidAptLogEntryIDError
+from apt_log.log import AptLogEntry, ChangedPackage, InvalidAptLogEntryIDError
 from apt_log.reader import build_system_apt_log
 
 app = typer.Typer()
@@ -126,17 +126,7 @@ def list_entries(
     console.print(table)
 
 
-@app.command("show", help="Inspect a single log entry.")
-def show_entry(
-        entry_id: int = typer.Argument(
-            metavar="ENTRY_ID", help="The ID of the log entry.",
-        ),
-):
-    try:
-        entry = build_system_apt_log().get_entry_by_id(entry_id)
-    except InvalidAptLogEntryIDError as err:
-        raise ClickException(str(err)) from err
-
+def _show_entry(entry: AptLogEntry):
     table = Table(show_header=False, box=None)
     table.add_column(style='bold magenta')
     table.add_column(style='blue')
@@ -183,3 +173,20 @@ def show_entry(
             table.add_section()
 
         console.print(table)
+
+
+@app.command("show", help="Inspect a single log entry.")
+def show_entry(
+        entry_id: int = typer.Argument(
+            metavar="ENTRY_ID", help="The ID of the log entry.",
+        ),
+):
+    try:
+        _show_entry(build_system_apt_log().get_entry_by_id(entry_id))
+    except InvalidAptLogEntryIDError as err:
+        raise ClickException(str(err)) from err
+
+
+@app.command("last", help="Inspect the last log entry.")
+def show_last_entry():
+    _show_entry(build_system_apt_log().get_last_entry())

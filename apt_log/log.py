@@ -137,3 +137,6 @@ class AptLog:
             return self.entries[entry_id - 1]
         except IndexError as err:
             raise InvalidAptLogEntryIDError(entry_id) from err
+
+    def get_last_entry(self) -> AptLogEntry:
+        return self.entries[- 1]

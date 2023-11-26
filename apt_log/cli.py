@@ -1,108 +1,133 @@
-import argparse
 import itertools
-import logging
+from datetime import datetime
+from typing import Annotated, Optional
 
-from texttable import Texttable
+import humanize
+import typer
+from click import ClickException
+from rich import box
+from rich.console import Console
+from rich.table import Table
 
+from apt_log.log import InvalidAptLogEntryIDError
 from apt_log.reader import build_system_apt_log
 
-
-def build_argparser():
-    main_parser = argparse.ArgumentParser()
-    main_parser.add_argument("--verbose", "-v", action="store_true", help="verbose mode")
-
-    main_subparsers = main_parser.add_subparsers(title="available changed_packages_by_action", metavar="ACTION",
-                                                 dest="action")
-    main_subparsers.required = True
-
-    find_parser = main_subparsers.add_parser("find", help="find log entries for a package")
-    find_parser.add_argument("--regex", "-r", action="store_true", help="consider PACKAGE to be a regular expression")
-    find_parser.add_argument("package", metavar="PACKAGE", type=str, help="package")
-
-    list_parser = main_subparsers.add_parser("list", help="list log entries")
-    list_parser.add_argument(
-        "--min-date",
-        "-m",
-        type=str,
-        help="shows only entries that are younger than the given date",
-    )
-    list_parser.add_argument("--max-date", "-M", type=str, help="shows only entries that are older than the given date")
-
-    show_parser = main_subparsers.add_parser("show", help="inspect a single log entry")
-    show_parser.add_argument("id", metavar="ID", type=int, help="id")
-
-    return main_parser
+app = typer.Typer()
+console = Console()
 
 
-def run():
-    # Parse arguments
-    parser = build_argparser()
-    args = parser.parse_args()
-
-    # Configure logging
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="[%(name)s] %(levelname)-8s %(message)s" if args.verbose else "%(message)s",
+@app.command("list", help="List APT log entries.")
+def list_entries(
+        *,
+        start_date: Annotated[Optional[datetime], typer.Option(
+            "--start-date", "-s",
+            help="Show only entries younger than the given date.",
+        )] = None,
+        end_date: Annotated[Optional[datetime], typer.Option(
+            "--end-date", "-e",
+            help="Show only entries older than the given date.",
+        )] = None,
+        show_versions: Annotated[bool, typer.Option(
+            "--show-versions", "-v",
+            help="Show versions of packages.",
+        )] = False,
+        package_name: Annotated[Optional[str], typer.Option(
+            "--package", "-p",
+            metavar='PACKAGE_NAME',
+            help="Filter entries by the name of the package (supports glob-style pattern matching).",
+        )] = None,
+):
+    entries = build_system_apt_log().get_entries(
+        start_date=start_date,
+        end_date=end_date,
+        package_name=package_name,
     )
 
-    log = build_system_apt_log()
+    table = Table(header_style='bold magenta', box=box.SIMPLE_HEAD)
+    table.add_column("ID", style='cyan')
+    table.add_column("DATE", style='green')
+    table.add_column("ACTION", style='blue')
+    table.add_column("PACKAGES", style='yellow')
 
-    def draw_table(entries, action_map=lambda entry: entry.changed_packages_by_action, abbreviate=True,
-                   include_versions=False):
-        table = Texttable(0)
-        table.set_deco(Texttable.VLINES | Texttable.HEADER)
-        table.header(["ID", "Date", "Action", "Packages"])
+    for entry in entries:
+        base_columns = [str(entry.id), entry.start_date.strftime('%Y-%m-%d %H:%M')]
 
-        for entry in entries:
-            core_data = [entry.id, entry.start_date.strftime("%Y-%m-%d %H:%M")]
-            actions = action_map(entry)
-            if actions:
-                for core, (action, packages) in zip(
-                        itertools.chain((core_data,), itertools.repeat([""] * len(core_data))),
-                        actions.items(),
-                ):
-                    if abbreviate and len(packages) > 5:
-                        packages_string = f"{len(packages)} packages"
-                    else:
-                        packages_string = ", ".join(
-                            f"{p.name} ({p.version})" if include_versions else p.name for p in packages
-                        )
-                    table.add_row(core + [action, packages_string])
+        if entry.has_changed_packages():
+            for base, (action, packages) in zip(
+                    itertools.chain((base_columns,), itertools.repeat([""] * len(base_columns))),
+                    entry.changed_packages_by_action.items(),
+            ):
+                if len(packages) > 5:
+                    packages_string = f"{len(packages)} packages"
+                else:
+                    packages_string = ", ".join(
+                        f"{p.name} ({p.version})" if show_versions else p.name for p in packages
+                    )
+                table.add_row(*base, action, packages_string)
 
-            elif entry.error:
-                table.add_row(core + ["ERROR", entry.error])
+        elif entry.error:
+            table.add_row(*base_columns, "ERROR", entry.error)
 
-            else:
-                table.add_row(core + ["UNKNOWN", ""])
+        else:
+            table.add_row(*base_columns, "UNKNOWN", "")
 
-        print(table.draw())
+    console.print(table)
 
-    if args.action == "find":
-        draw_table(log.get_entries(name=args.package), abbreviate=False, include_versions=True)
 
-    elif args.action == "list":
-        draw_table(log.get_entries(args.min_date, args.max_date))
+@app.command("show", help="Inspect a single log entry.")
+def show_entry(
+        entry_id: int = typer.Argument(
+            metavar="ENTRY_ID", help="The ID of the log entry.",
+        ),
+):
+    try:
+        entry = build_system_apt_log().get_entry_by_id(entry_id)
+    except InvalidAptLogEntryIDError as err:
+        raise ClickException(str(err)) from err
 
-    elif args.action == "show":
-        entry = log.get_entry_by_id(args.id)
+    table = Table(show_header=False, box=None)
+    table.add_column(style='bold magenta')
+    table.add_column(style='blue')
 
-        table = Texttable(0)
-        table.set_deco(0)
+    if entry.start_date is not None:
+        table.add_row("DATE", entry.start_date.strftime('%Y-%m-%d %H:%M:%S'))
 
-        if entry.start_date is not None:
-            table.add_row(["Start-Date:", entry.start_date.strftime("%Y-%m-%d %H:%M:%S"), ""])
-        if entry.end_date is not None:
-            table.add_row(["End-Date:", entry.end_date.strftime("%Y-%m-%d %H:%M:%S"), ""])
+    if entry.command_line is not None:
+        table.add_row("COMMAND", f"[yellow]{entry.command_line}")
 
-        table.add_row(["Duration:", entry.duration, ""])
+    if entry.duration is not None:
+        table.add_row("DURATION", humanize.naturaldelta(entry.duration))
 
-        if entry.requested_by:
-            table.add_row(["Requested-By:", entry.requested_by, ""])
-        if entry.error:
-            table.add_row(["Error:", entry.error, ""])
+    if entry.requested_by:
+        table.add_row("USER", entry.requested_by)
+
+    if entry.error:
+        table.add_row("ERROR MESSAGE", entry.error)
+
+    console.print(table)
+
+    if entry.has_changed_packages():
+        table = Table(header_style='bold magenta', box=box.SIMPLE_HEAD)
+        table.add_column("ACTION", style='blue')
+        table.add_column("PACKAGES", style='yellow')
+        table.add_column("VERSION", style='cyan')
+
+        if entry.has_version_changes():
+            table.add_column("PREVIOUS VERSION", style='cyan dim')
 
         for action, packages in entry.changed_packages_by_action.items():
-            for key, package in zip(itertools.chain((f"{action}:",), itertools.repeat("")), packages):
-                table.add_row([key, package.name, package.version])
+            for n, package in enumerate(packages):
+                row = [
+                    str(action) if n == 0 else "",
+                    package.name,
+                    package.version,
+                ]
 
-        print(table.draw())
+                if entry.has_version_changes():
+                    row.append(package.previous_version)
+
+                table.add_row(*row)
+
+            table.add_section()
+
+        console.print(table)

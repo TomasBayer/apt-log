@@ -1,7 +1,7 @@
 import enum
-import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from fnmatch import fnmatch
 from typing import Collection, Iterable, Iterator
 
 
@@ -54,8 +54,7 @@ class AptLogEntry:
 
     def filter(
             self,
-            name: str | None = None,
-            name_regex: str | None = None,
+            package_name: str | None = None,
             architecture: str | None = None,
             version: str | None = None,
             actions: Collection[PackageAction] | None = None,
@@ -67,8 +66,7 @@ class AptLogEntry:
                 filtered_packages = [
                     package for package in changed_packages
                     if all((
-                        name is None or name == package.name,
-                        name_regex is None or re.match(name_regex, package.name),
+                        package_name is None or fnmatch(package.name, package_name),
                         architecture is None or architecture == package.architecture,
                         version is None or version == package.version,
                     ))
@@ -76,7 +74,7 @@ class AptLogEntry:
                 if filtered_packages:
                     changed_packages_by_action[action] = filtered_packages
 
-        return replace(self, changed_packages_by_action = changed_packages_by_action)
+        return replace(self, changed_packages_by_action=changed_packages_by_action)
 
     def has_changed_packages(self) -> bool:
         return bool(self.changed_packages_by_action)
@@ -112,8 +110,7 @@ class AptLog:
             self,
             start_date: datetime | None = None,
             end_date: datetime | None = None,
-            name: str | None = None,
-            name_regex: str | None = None,
+            package_name: str | None = None,
             architecture: str | None = None,
             version: str | None = None,
             actions: Collection[PackageAction] | None = None,
@@ -126,8 +123,7 @@ class AptLog:
                 continue
 
             filtered_entry = entry.filter(
-                name=name,
-                name_regex=name_regex,
+                package_name=package_name,
                 architecture=architecture,
                 version=version,
                 actions=actions,
@@ -137,4 +133,7 @@ class AptLog:
                 yield filtered_entry
 
     def get_entry_by_id(self, entry_id: int) -> AptLogEntry:
-        return self.entries[entry_id - 1]
+        try:
+            return self.entries[entry_id - 1]
+        except IndexError as err:
+            raise InvalidAptLogEntryIDError(entry_id) from err

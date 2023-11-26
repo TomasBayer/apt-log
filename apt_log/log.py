@@ -1,148 +1,140 @@
-import datetime
-import gzip
-import itertools
-import logging
-import os
+import enum
 import re
-
-import dateparser
-
-logger = logging.getLogger(__name__)
-
-BASE_DIR = '/var/log/apt/'
-PACKAGE_FORMAT = re.compile('(\S+):(\S+) \(([^\(\)]*)\)')
-ACTIONS = ('Install', 'Upgrade', 'Downgrade', 'Remove', 'Reinstall', 'Purge')
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta
+from typing import Collection, Iterable, Iterator
 
 
-def _parse_date(date_string):
-    return datetime.datetime.strptime(date_string, '%Y-%m-%d  %H:%M:%S')
+class PackageAction(enum.StrEnum):
+    INSTALL = "Install"
+    UPGRADE = "Upgrade"
+    DOWNGRADE = "Downgrade"
+    REMOVE = "Remove"
+    REINSTALL = "Reinstall"
+    PURGE = "Purge"
 
 
-class Package(object):
+@dataclass
+class ChangedPackage:
+    name: str
+    architecture: str
+    version: str
 
-    def __init__(self, name, architecture, version, old_version):
-        self.name = name
-        self.architecture = architecture
-        self.version = version
-        self.old_version = old_version
+    action: PackageAction
 
-    def __str__(self):
-        return "{}:{} ({})".format(self.name, self.architecture, self.version)
-
-    def __repr__(self):
-        return "Package({}, {}, {})".format(self.name, self.architecture, self.version)
+    previous_version: str | None = None
+    is_automatic: bool = False
 
 
-def _parse_package_list(raw_packages, action):
-    l = len(raw_packages)
-    pos = 0
-    packages = []
-    while pos < l:
-        m = PACKAGE_FORMAT.match(raw_packages, pos)
-        assert m, 'Malformed log in packages list \'{}\''.format(raw_packages)
-        assert m.start() == pos, 'Malformed log in packages list \'{}\''.format(raw_packages)
-        name, architecture, version = m.groups()
-        if action == 'Install' and version.endswith(', automatic'):
-            target_action = 'Auto-Install'
-            version = version[:-11]
-        else:
-            target_action = action
-        if action == 'Upgrade':
-            old_version, version = version.split(', ')
-        else:
-            old_version = None
-        yield target_action, Package(name, architecture, version, old_version)
-        pos += len(m.group()) + 2
+@dataclass
+class AptLogEntry:
+    id: int | None = None
 
+    changed_packages_by_action: dict[PackageAction, list[ChangedPackage]] = field(default_factory=dict)
 
-class AptLogEntry(object):
+    start_date: datetime | None = None
+    end_date: datetime | None = None
 
-    def __init__(self, raw_data):
-        self.id = None
-        self.start_date = _parse_date(raw_data.pop('Start-Date')) if 'Start-Date' in raw_data else None
-        self.end_date = _parse_date(raw_data.pop('End-Date')) if 'End-Date' in raw_data else None
-        if self.start_date is not None and self.end_date is not None:
-            self.duration = self.end_date - self.start_date
-        else:
-            self.duration = None
-        self.command = raw_data.pop('Commandline')
-        self.requested_by = raw_data.pop('Requested-By', None)
-        self.error = raw_data.pop('Error', None)
-        self.actions = {}
-        for action, packages in itertools.chain.from_iterable(
-                _parse_package_list(raw_data.pop(action), action) for action in ACTIONS if action in raw_data):
-            self.actions.setdefault(action, []).append(packages)
-        assert not raw_data, 'Malformed log: Unknown entries: {}'.format(', '.join(raw_data.keys()))
+    command_line: str | None = None
+    requested_by: str | None = None
+    error: str | None = None
 
-    def is_before(self, date):
+    def is_before(self, date: datetime) -> bool:
         return self.end_date is not None and self.end_date < date
 
-    def is_after(self, date):
+    def is_after(self, date: datetime) -> bool:
         return self.start_date is not None and self.start_date > date
 
-    def get_packages(self, action, name, architecture=None, version=None, regex=False):
-        for package in self.actions.get(action, []):
-            if (regex and re.match(name, package.name)) or (not regex and package.name == name):
-                if (architecture is None or package.architecture == architecture) and (
-                        version is None or package.version == version):
-                    yield package
+    @property
+    def duration(self) -> timedelta | None:
+        if self.start_date is None or self.end_date is None:
+            return None
+        else:
+            return self.end_date - self.start_date
 
-    def get_package_actions(self, name, architecture=None, version=None, regex=False):
-        actions = {}
-        for action, packages in self.actions.items():
-            packages = list(self.get_packages(action, name, architecture, version, regex))
-            if packages:
-                actions[action] = packages
-        return actions
+    def filter(
+            self,
+            name: str | None = None,
+            name_regex: str | None = None,
+            architecture: str | None = None,
+            version: str | None = None,
+            actions: Collection[PackageAction] | None = None,
+    ) -> 'AptLogEntry':
+        changed_packages_by_action = {}
+
+        for action, changed_packages in self.changed_packages_by_action.items():
+            if actions is None or action in actions:
+                filtered_packages = [
+                    package for package in changed_packages
+                    if all((
+                        name is None or name == package.name,
+                        name_regex is None or re.match(name_regex, package.name),
+                        architecture is None or architecture == package.architecture,
+                        version is None or version == package.version,
+                    ))
+                ]
+                if filtered_packages:
+                    changed_packages_by_action[action] = filtered_packages
+
+        return replace(self, changed_packages_by_action = changed_packages_by_action)
+
+    def has_changed_packages(self) -> bool:
+        return bool(self.changed_packages_by_action)
+
+    def has_version_changes(self) -> bool:
+        return any(
+            action in self.changed_packages_by_action for action in (PackageAction.UPGRADE, PackageAction.DOWNGRADE)
+        )
 
 
-class AptLog(object):
+@dataclass
+class InvalidAptLogEntryIDError(Exception):
+    wrong_entry_id: int
 
-    def __init__(self, log_dir=BASE_DIR):
-        self.log_dir = log_dir
-        self.entries = sorted(map(AptLogEntry, self._parse_logs()), key=lambda entry: entry.start_date)
+    def __str__(self):
+        return f"Invalid log entry: {self.wrong_entry_id}"
 
-        for n, entry in enumerate(self.entries, 1):
+
+class AptLog:
+    entries: list[AptLogEntry]
+
+    def __init__(self, entries: Iterable[AptLogEntry]):
+        # Sort entries chronologically
+        entries = sorted(entries, key=lambda entry: entry.start_date)
+
+        # Assign entry IDs in ascending chronological order starting with 1
+        for n, entry in enumerate(entries, 1):
             entry.id = n
 
-    def get_entries(self, min_date=None, max_date=None):
-        min_date = datetime.datetime.min if min_date is None else min_date if isinstance(min_date,
-                                                                                         datetime.datetime) else dateparser.parse(
-            min_date)
-        max_date = datetime.datetime.max if max_date is None else max_date if isinstance(max_date,
-                                                                                         datetime.datetime) else dateparser.parse(
-            max_date)
-        return filter(lambda entry: entry.is_after(min_date) and entry.is_before(max_date), self.entries)
+        self.entries = entries
 
-    def _parse_log(self, log_fh):
-        entry = {}
-        for line in log_fh:
-            line = line.decode('utf8').rstrip()
-            if line:
-                key, value = line.split(': ', 1)
-                entry[key] = value
-            else:
-                if entry:
-                    yield entry
-                entry = {}
-        if entry is not None:
-            if entry:
-                yield entry
-
-    def _parse_logs(self):
-        for f in os.listdir(self.log_dir):
-            if f.startswith('history.log'):
-                with (gzip.open if f.endswith('.gz') else open)(os.path.join(self.log_dir, f), 'rb') as f:
-                    yield from self._parse_log(f)
-
-    def find_package_actions(self, name, architecture=None, version=None, regex=False):
+    def get_entries(
+            self,
+            start_date: datetime | None = None,
+            end_date: datetime | None = None,
+            name: str | None = None,
+            name_regex: str | None = None,
+            architecture: str | None = None,
+            version: str | None = None,
+            actions: Collection[PackageAction] | None = None,
+    ) -> Iterator[AptLogEntry]:
         for entry in self.entries:
-            actions = entry.get_package_actions(name, architecture, version, regex)
-            if actions:
-                yield (entry, actions)
+            if start_date is not None and entry.is_before(start_date):
+                continue
 
-    def __getitem__(self, id):
-        return self.entries[id - 1]
+            if end_date is not None and entry.is_after(end_date):
+                continue
 
-    def __iter__(self):
-        return iter(self.entries)
+            filtered_entry = entry.filter(
+                name=name,
+                name_regex=name_regex,
+                architecture=architecture,
+                version=version,
+                actions=actions,
+            )
+
+            if filtered_entry.has_changed_packages():
+                yield filtered_entry
+
+    def get_entry_by_id(self, entry_id: int) -> AptLogEntry:
+        return self.entries[entry_id - 1]

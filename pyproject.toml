@@ -11,6 +11,7 @@ apt-log = "apt_log.cli:run"
 
 [tool.poetry.dependencies]
 python = "^3.11"
+dataclass-builder = "^1.2.0"
 dateparser = "^1.2.0"
 texttable = "^1.7.0"
 
@@ -33,7 +34,6 @@ select = [
     "SIM", # simplify
     "COM", # commas
     "C4", # comprehensions
-    "DTZ", # TZ aware datetime
     "T20", # print statements
     "RET501", "RET502", "RET503", "RET504", # return statements
     "PTH", # use pathlib

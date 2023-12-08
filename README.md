@@ -1,5 +1,8 @@
 # apt-log
 
+[![PyPI - Version](https://img.shields.io/pypi/v/apt-log)](https://pypi.org/project/apt-log/)
+
+
 `apt-log` is a command-line tool that offers a user-friendly display and convenient filtering for APT package logs.
 
 The package also contains a Python module that provides a parser and high-level interface to APT package logs.
